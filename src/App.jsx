@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
@@ -26,12 +26,26 @@ export default function App() {
   const [selected, setSelected] = useState('')
   const [readings, setReadings] = useState([])
   const [loading, setLoading] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const selectedDevice = useMemo(() => devices.find(d => d.device_id === selected), [devices, selected])
+  const powerOn = !!selectedDevice?.power
+
+  const fetchDevices = () => {
+    return fetch(`${API_BASE}/api/devices`)
+      .then(r=>r.json())
+      .then(d=>{
+        setDevices(d)
+        if (d.length && !selected) setSelected(d[0].device_id)
+      })
+      .catch(()=>{})
+  }
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/devices`).then(r=>r.json()).then(d=>{
-      setDevices(d)
-      if (d.length && !selected) setSelected(d[0].device_id)
-    }).catch(()=>{})
+    fetchDevices()
+    const id = setInterval(fetchDevices, 10000)
+    return () => clearInterval(id)
   }, [])
 
   useEffect(() => {
@@ -50,6 +64,30 @@ export default function App() {
 
   const latest = readings[0] || {}
 
+  const toggleFan = async () => {
+    if (!selected) return
+    setSending(true)
+    setMessage('')
+    try {
+      const body = { device_id: selected, power: !powerOn, mode: 'manual' }
+      const res = await fetch(`${API_BASE}/api/commands`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      if (!res.ok) throw new Error('Failed to queue command')
+      setMessage(!powerOn ? 'Turned fan ON (queued)' : 'Turned fan OFF (queued)')
+      // refresh devices to reflect possible immediate state changes (optimistic)
+      fetchDevices()
+    } catch (e) {
+      setMessage('Error sending command')
+    } finally {
+      setSending(false)
+      // Auto-clear message after a short delay
+      setTimeout(()=> setMessage(''), 4000)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-teal-50">
       <header className="sticky top-0 bg-white/70 backdrop-blur border-b">
@@ -62,13 +100,33 @@ export default function App() {
       </header>
 
       <main className="max-w-5xl mx-auto p-6 space-y-6">
-        <div className="flex items-center gap-3">
-          <select value={selected} onChange={e=>setSelected(e.target.value)} className="border rounded px-3 py-2">
-            <option value="" disabled>Select device</option>
-            {devices.map(d=> <option key={d._id} value={d.device_id}>{d.name||d.device_id}</option>)}
-          </select>
-          <span className="text-sm text-gray-500">{loading? 'Updating…' : readings.length? 'Live' : 'Waiting for data'}</span>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="flex items-center gap-3">
+            <select value={selected} onChange={e=>setSelected(e.target.value)} className="border rounded px-3 py-2">
+              <option value="" disabled>Select device</option>
+              {devices.map(d=> <option key={d._id} value={d.device_id}>{d.name||d.device_id}</option>)}
+            </select>
+            <span className="text-sm text-gray-500">{loading? 'Updating…' : readings.length? 'Live' : 'Waiting for data'}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              disabled={!selected || sending}
+              onClick={toggleFan}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-white shadow-sm transition ${sending ? 'opacity-60 cursor-not-allowed' : 'hover:opacity-90'} ${powerOn ? 'bg-red-500' : 'bg-emerald-600'}`}
+            >
+              {sending ? 'Sending…' : powerOn ? 'Turn Fan Off' : 'Turn Fan On'}
+            </button>
+            {selectedDevice && (
+              <span className="text-xs text-gray-600">Current: {powerOn ? 'On' : 'Off'}</span>
+            )}
+          </div>
         </div>
+
+        {message && (
+          <div className="bg-blue-50 border border-blue-200 text-blue-800 text-sm px-3 py-2 rounded-lg">
+            {message}
+          </div>
+        )}
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Stat label="PM2.5" value={latest.pm2_5} unit="µg/m³" />
